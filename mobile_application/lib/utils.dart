@@ -6,7 +6,7 @@ Uint8List convertImageToBytes(CameraImage image) {
   try {
     img.Image convertedImage = convertYUV420ToImage(image);
 
-    return Uint8List.fromList(img.encodeJpg(convertedImage));
+    return Uint8List.fromList(img.encodeJpg(convertedImage, quality: 25));
   } catch (e) {
     return Uint8List(0);
   }
