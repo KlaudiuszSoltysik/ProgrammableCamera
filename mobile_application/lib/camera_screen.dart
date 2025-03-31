@@ -65,17 +65,17 @@ class _CameraScreenState extends State<CameraScreen> {
 
     setState(() {});
 
-    //_channel = IOWebSocketChannel.connect("ws://10.0.2.2:5050/send");
-    _channel = IOWebSocketChannel.connect("ws://192.168.8.29:5050/send");
+    _channel = IOWebSocketChannel.connect("ws://10.0.2.2:8000/camera");
+    // _channel = IOWebSocketChannel.connect("ws://192.168.8.29:8000/send");
 
     int lastFrameTime = 0;
 
-    _channel!.sink.add(jsonEncode({"token": "token"}));
+    _channel!.sink.add(jsonEncode({"token": token}));
 
     _cameraController!.startImageStream((CameraImage image) {
       int now = DateTime.now().millisecondsSinceEpoch;
 
-      if (now - lastFrameTime < 50) return;
+      if (now - lastFrameTime < 30) return;
       lastFrameTime = now;
 
       Uint8List imageBytes = convertImageToBytes(image);
