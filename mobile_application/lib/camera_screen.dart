@@ -1,12 +1,9 @@
 import "dart:convert";
 
-import "package:camera/camera.dart";
 import "package:flutter/material.dart";
-import "package:flutter/services.dart";
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:http/http.dart' as http;
 import "package:wakelock_plus/wakelock_plus.dart";
-import "package:web_socket_channel/io.dart";
-
-import 'utils.dart';
 
 class CameraScreen extends StatefulWidget {
   @override
@@ -14,8 +11,11 @@ class CameraScreen extends StatefulWidget {
 }
 
 class _CameraScreenState extends State<CameraScreen> {
-  CameraController? _cameraController;
-  IOWebSocketChannel? _channel;
+  RTCPeerConnection? _peerConnection;
+  MediaStream? _localStream;
+  final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
+  // final String serverUrl = "http://10.0.2.2:8000";
+  final String serverUrl = "http://192.168.8.31:8000";
 
   String? token;
 
@@ -37,62 +37,65 @@ class _CameraScreenState extends State<CameraScreen> {
   void initState() {
     super.initState();
     WakelockPlus.enable();
-    _initializeCamera();
+    _initializeWebRTC();
   }
 
   @override
   void dispose() {
+    _localRenderer.dispose();
+    _peerConnection?.close();
+    _localStream?.dispose();
     WakelockPlus.disable();
-    _cameraController!.stopImageStream();
-    _cameraController?.dispose();
-    _channel?.sink.close();
     super.dispose();
   }
 
-  Future<void> _initializeCamera() async {
-    final cameras = await availableCameras();
-    final backCamera = cameras.firstWhere(
-      (camera) => camera.lensDirection == CameraLensDirection.back,
-    );
+  Future<void> _initializeWebRTC() async {
+    await _localRenderer.initialize();
 
-    _cameraController = CameraController(
-      backCamera,
-      ResolutionPreset.medium,
-      enableAudio: true,
-    );
-
-    await _cameraController!.initialize();
-
-    setState(() {});
-
-    _channel = IOWebSocketChannel.connect("ws://10.0.2.2:8000/camera");
-    // _channel = IOWebSocketChannel.connect("ws://192.168.8.29:8000/send");
-
-    int lastFrameTime = 0;
-
-    _channel!.sink.add(jsonEncode({"token": token}));
-
-    _cameraController!.startImageStream((CameraImage image) {
-      int now = DateTime.now().millisecondsSinceEpoch;
-
-      if (now - lastFrameTime < 30) return;
-      lastFrameTime = now;
-
-      Uint8List imageBytes = convertImageToBytes(image);
-
-      _channel!.sink.add(imageBytes);
+    _localStream = await navigator.mediaDevices.getUserMedia({
+      'video': {
+        'facingMode': 'environment',
+        'width': {'ideal': 1920, 'min': 1280},
+        'height': {'ideal': 1080, 'min': 720},
+        'frameRate': {'ideal': 30, 'max': 30},
+        'mandatory': {'minWidth': 1280, 'minHeight': 720, 'minFrameRate': 30},
+      },
+      'audio': true,
     });
+
+    _localRenderer.srcObject = _localStream;
+
+    Map<String, dynamic> config = {
+      'iceServers': [
+        {'urls': 'stun:stun.l.google.com:19302'},
+      ],
+    };
+
+    _peerConnection = await createPeerConnection(config);
+
+    _localStream!.getTracks().forEach((track) {
+      _peerConnection!.addTrack(track, _localStream!);
+    });
+
+    RTCSessionDescription offer = await _peerConnection!.createOffer();
+    await _peerConnection!.setLocalDescription(offer);
+
+    final response = await http.post(
+      Uri.parse('$serverUrl/offer'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'sdp': offer.sdp, 'type': offer.type}),
+    );
+
+    if (response.statusCode == 200) {
+      final answer = jsonDecode(response.body);
+      await _peerConnection!.setRemoteDescription(
+        RTCSessionDescription(answer['sdp'], answer['type']),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child:
-            _cameraController == null || !_cameraController!.value.isInitialized
-                ? CircularProgressIndicator()
-                : CameraPreview(_cameraController!),
-      ),
-    );
+    return Scaffold(body: Center(child: RTCVideoView(_localRenderer)));
   }
 }

@@ -1,37 +1,69 @@
-﻿from fastapi import FastAPI, WebSocket
-import json
-import cv2
-import numpy as np
-import threading
+﻿import cv2
+from fastapi import FastAPI
+from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
+from contextlib import asynccontextmanager
+from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer
+from aiortc.contrib.media import MediaPlayer
 
 
-def process_image(image_bytes):
-    nparr = np.frombuffer(image_bytes, np.uint8)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global pcs
 
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    pcs = set()
+    yield
 
-    if img is not None:
-        cv2.imshow("Streaming", img)
+    for pc in pcs:
+        await pc.close()
+    pcs.clear()
+
+app = FastAPI(lifespan=lifespan)
+
+class VideoStreamTrack(MediaStreamTrack):
+    kind = "video"
+    def __init__(self, track):
+        super().__init__()
+        self.track = track
+
+    async def recv(self):
+        frame = await self.track.recv()
+
+        img = frame.to_ndarray(format="bgr24")
+
+        print(f"Received frame size: {img.shape}")
+
+        cv2.imshow("Video", img)
         cv2.waitKey(1)
 
+        return frame
 
-app = FastAPI()
+@app.post("/offer")
+async def offer_sdp(offer: dict):
+    config = RTCConfiguration(
+        iceServers=[RTCIceServer(urls="stun:stun.l.google.com:19302")]
+    )
+    pc = RTCPeerConnection(configuration=config)
+    pcs.add(pc)
 
-@app.websocket("/camera")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
+    @pc.on("track")
+    def on_track(track):
+        print(f"📹 Receiving video track: {track.kind}")
+        if track.kind == "video":
+            pc.addTrack(VideoStreamTrack(track))
 
-    websocket.max_size = 10 * 1024 * 1024
+    offer_sdp = RTCSessionDescription(sdp=offer["sdp"], type=offer["type"])
+    await pc.setRemoteDescription(offer_sdp)
 
-    data = await websocket.receive_text()
+    # for sender in pc.getSenders():
+    #     if sender.track.kind == "video":
+    #         encodings = sender.getParameters().encodings
+    #         for encoding in encodings:
+    #             # Set maxBitrate and resolution scale
+    #             encoding.maxBitrate = 2000000  # Set maximum bitrate to 2 Mbps
+    #             encoding.scaleResolutionDownBy = 1.0  # No resolution scaling
+    #         await sender.setParameters(sender.getParameters())
 
-    token = json.loads(data)["token"]
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
 
-    while True:
-        image_bytes = await websocket.receive_bytes()
-
-        thread = threading.Thread(target=process_image, args=(image_bytes,))
-        thread.start()
-
-
-# uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
