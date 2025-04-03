@@ -1,8 +1,7 @@
 ﻿import cv2
 from fastapi import FastAPI
-from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
+from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, RTCConfiguration, RTCIceServer
 from contextlib import asynccontextmanager
-from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer
 from aiortc.contrib.media import MediaPlayer
 
 
