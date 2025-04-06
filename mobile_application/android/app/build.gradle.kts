@@ -39,6 +39,11 @@ android {
     }
 }
 
+dependencies {
+    implementation("com.infobip:google-webrtc:1.0.43591")
+    implementation("com.squareup.okhttp3:okhttp:5.0.0-alpha.14")
+}
+
 flutter {
     source = "../.."
 }
