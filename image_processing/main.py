@@ -1,7 +1,11 @@
-﻿from fastapi import FastAPI
-from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, RTCConfiguration, RTCIceServer
-from contextlib import asynccontextmanager
+﻿from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc.contrib.media import MediaBlackhole
 import cv2
+import numpy as np
 import asyncio
 
 
@@ -18,45 +22,48 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+pcs = set()
 
-
-class VideoStreamTrack(MediaStreamTrack):
-    kind = "video"
-
+class VideoDisplayTrack(VideoStreamTrack):
+    """
+    A video stream track that displays incoming frames using OpenCV.
+    """
     def __init__(self, track):
-        super().__init__()
+        super().__init__()  # Initialize parent
         self.track = track
 
     async def recv(self):
         frame = await self.track.recv()
 
         img = frame.to_ndarray(format="bgr24")
-        resized = cv2.resize(img, (360, 640))
-        rotated = cv2.rotate(resized, cv2.ROTATE_90_CLOCKWISE)
-
-        cv2.imshow("Video", rotated)
+        cv2.imshow("WebRTC Stream", img)
         cv2.waitKey(1)
 
         return frame
 
 
 @app.post("/offer")
-async def offer_sdp(offer: dict):
+async def offer(request: Request):
+    params = await request.json()
+    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+
     pc = RTCPeerConnection()
     pcs.add(pc)
 
     @pc.on("track")
     def on_track(track):
+        print(f"Track received: {track.kind}")
         if track.kind == "video":
-            pc.addTrack(VideoStreamTrack(track))
+            display = VideoDisplayTrack(track)
+            pc.addTrack(display)
 
-    # Set the remote SDP offer from the client
-    offer_sdp = RTCSessionDescription(sdp=offer["sdp"], type=offer["type"])
-    await pc.setRemoteDescription(offer_sdp)
-
-    # Create an answer SDP and set it as the local description
+    await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
-    # Return the SDP answer to the client
-    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+    return JSONResponse({
+        "sdp": pc.localDescription.sdp,
+        "type": pc.localDescription.type
+    })
+
+

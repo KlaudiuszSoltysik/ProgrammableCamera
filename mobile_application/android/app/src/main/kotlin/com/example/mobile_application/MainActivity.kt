@@ -7,11 +7,13 @@ import android.os.Bundle
 import androidx.core.app.ActivityCompat
 import android.Manifest
 import android.content.Context
+import android.util.Log
 
 import org.webrtc.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.Executors
 
@@ -74,14 +76,8 @@ class NativeBridge {
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
 
         peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-            override fun onIceCandidate(candidate: IceCandidate) {
-                // Send ICE candidates to the server
-            }
-
-            override fun onAddStream(stream: MediaStream?) {
-                // This method is no longer needed in UNIFIED_PLAN
-            }
-
+            override fun onIceCandidate(candidate: IceCandidate) {}
+            override fun onAddStream(stream: MediaStream?) {}
             override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
             override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {}
             override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {}
@@ -91,32 +87,26 @@ class NativeBridge {
             override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {}
             override fun onRenegotiationNeeded() {}
             override fun onRemoveStream(p0: MediaStream?) {}
-
-            override fun onIceConnectionReceivingChange(receiving: Boolean) {
-                // Handle ICE connection state changes
-            }
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
         })!!
 
-        // Create MediaConstraints for video and audio
         val mediaConstraints = MediaConstraints()
 
-        // Initialize CameraCapturer
-        val videoCapturer: VideoCapturer? = createCameraCapturer()
+        val eglBase = EglBase.create()
+        val surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
 
-        // Create VideoSource from the capturer
-        val videoSource = peerConnectionFactory.createVideoSource(videoCapturer!!.isScreencast)
+        val videoCapturer = createCameraCapturer(context)
+            ?: throw IllegalStateException("No camera found")
+
+        val videoSource = peerConnectionFactory.createVideoSource(false)
+        videoCapturer.initialize(surfaceTextureHelper, context, videoSource.capturerObserver)
+        videoCapturer.startCapture(1280, 720, 30)
+
         val videoTrack = peerConnectionFactory.createVideoTrack("100", videoSource)
-        videoTrack.setEnabled(true)
 
-        // Create AudioSource
-        val audioSource = peerConnectionFactory.createAudioSource(MediaConstraints())
-        val audioTrack = peerConnectionFactory.createAudioTrack("101", audioSource)
+        val streamId = "stream1"
+        peerConnection.addTrack(videoTrack, listOf(streamId))
 
-        // Add tracks to the peer connection
-        peerConnection.addTrack(videoTrack)
-        peerConnection.addTrack(audioTrack)
-
-        // Continue with creating an offer and sending it to the server
         peerConnection.createOffer(object : SdpObserver {
             override fun onCreateSuccess(offer: SessionDescription) {
                 peerConnection.setLocalDescription(object : SdpObserver {
@@ -136,56 +126,56 @@ class NativeBridge {
         }, mediaConstraints)
     }
 
-    // Create the CameraCapturer using Camera1Enumerator or Camera2Enumerator
-    private fun createCameraCapturer(): VideoCapturer? {
-        val enumerator = Camera1Enumerator(true)  // You can use Camera2Enumerator if needed
+    private fun createCameraCapturer(context: Context): VideoCapturer? {
+        val enumerator = Camera2Enumerator(context)
         val deviceNames = enumerator.deviceNames
         for (deviceName in deviceNames) {
-            if (enumerator.isFrontFacing(deviceName)) {
+            if (enumerator.isBackFacing(deviceName)) {
                 val capturer = enumerator.createCapturer(deviceName, null)
                 if (capturer != null) {
                     return capturer
                 }
             }
         }
-        // Fallback to the rear-facing camera
-        for (deviceName in deviceNames) {
-            if (!enumerator.isFrontFacing(deviceName)) {
-                val capturer = enumerator.createCapturer(deviceName, null)
-                if (capturer != null) {
-                    return capturer
-                }
-            }
-        }
+
         return null
     }
 
     private fun sendOfferToServer(offer: SessionDescription) {
         val client = OkHttpClient()
         val sanitizedSdp = offer.description.replace("\n", "\\n").replace("\r", "\\r")
-        val json = """
-            {
-              "sdp": "$sanitizedSdp",
-              "type": "${offer.type.canonicalForm()}"
-            }
-        """.trimIndent()
 
-        val requestBody = json.toRequestBody("application/json".toMediaTypeOrNull())
+        val requestBody = JSONObject().apply {
+            put("sdp", offer.description)
+            put("type", offer.type.canonicalForm())
+        }
         val request = Request.Builder()
             .url("http://192.168.8.33:8000/offer") // `localhost` for emulator is 10.0.2.2
-            .post(requestBody)
+            .post(requestBody.toString().toRequestBody("application/json".toMediaTypeOrNull()))
             .build()
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                println("Failed to send offer: ${e.message}")
+                e.printStackTrace()
             }
 
             override fun onResponse(call: Call, response: Response) {
-                val answerJson = response.body?.string()
-                // parse and apply answer
-                // you can use org.json.JSONObject or a library like Moshi
-                println("Received answer: $answerJson")
+                response.body?.string()?.let { body ->
+                    val json = JSONObject(body)
+                    val sdp = json.getString("sdp")
+                    val type = json.getString("type")
+                    val answer = SessionDescription(SessionDescription.Type.fromCanonicalForm(type), sdp)
+                    
+                    peerConnection.setRemoteDescription(object : SdpObserver {
+                        override fun onSetSuccess() {
+                            Log.d("WebRTC", "Remote SDP set")
+                        }
+
+                        override fun onSetFailure(p0: String?) {}
+                        override fun onCreateSuccess(p0: SessionDescription?) {}
+                        override fun onCreateFailure(p0: String?) {}
+                    }, answer)
+                }
             }
         })
     }
