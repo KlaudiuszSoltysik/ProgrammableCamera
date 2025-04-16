@@ -25,11 +25,8 @@ app = FastAPI(lifespan=lifespan)
 pcs = set()
 
 class VideoDisplayTrack(VideoStreamTrack):
-    """
-    A video stream track that displays incoming frames using OpenCV.
-    """
     def __init__(self, track):
-        super().__init__()  # Initialize parent
+        super().__init__()
         self.track = track
 
     async def recv(self):
@@ -57,7 +54,11 @@ async def offer(request: Request):
             display = VideoDisplayTrack(track)
             pc.addTrack(display)
 
-    await pc.setRemoteDescription(offer)
+    print(offer)
+    try:
+        await pc.setRemoteDescription(offer)
+    except Exception as e:
+        print("Error setting remote description:", e)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 

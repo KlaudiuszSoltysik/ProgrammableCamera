@@ -63,17 +63,22 @@ class NativeBridge {
             .createInitializationOptions()
         PeerConnectionFactory.initialize(initializationOptions)
 
+        val eglBase = EglBase.create()
+
         val options = PeerConnectionFactory.Options()
         peerConnectionFactory = PeerConnectionFactory.builder()
             .setOptions(options)
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
             .createPeerConnectionFactory()
 
         val iceServers = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
         )
-
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+
+        val surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
 
         peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate) {}
@@ -92,20 +97,28 @@ class NativeBridge {
 
         val mediaConstraints = MediaConstraints()
 
-        val eglBase = EglBase.create()
-        val surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
-
         val videoCapturer = createCameraCapturer(context)
             ?: throw IllegalStateException("No camera found")
+
+        val streamId = "stream1"
 
         val videoSource = peerConnectionFactory.createVideoSource(false)
         videoCapturer.initialize(surfaceTextureHelper, context, videoSource.capturerObserver)
         videoCapturer.startCapture(1280, 720, 30)
-
         val videoTrack = peerConnectionFactory.createVideoTrack("100", videoSource)
-
-        val streamId = "stream1"
+        videoTrack.setEnabled(true)
         peerConnection.addTrack(videoTrack, listOf(streamId))
+
+        val audioConstraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
+        }
+        val audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
+        val audioTrack = peerConnectionFactory.createAudioTrack("101", audioSource)
+        audioTrack.setEnabled(true)
+        peerConnection.addTrack(audioTrack, listOf(streamId))
 
         peerConnection.createOffer(object : SdpObserver {
             override fun onCreateSuccess(offer: SessionDescription) {
@@ -150,7 +163,7 @@ class NativeBridge {
             put("type", offer.type.canonicalForm())
         }
         val request = Request.Builder()
-            .url("http://192.168.8.33:8000/offer") // `localhost` for emulator is 10.0.2.2
+            .url("http://192.168.0.19:8000/offer") // `localhost` for emulator is 10.0.2.2
             .post(requestBody.toString().toRequestBody("application/json".toMediaTypeOrNull()))
             .build()
 
