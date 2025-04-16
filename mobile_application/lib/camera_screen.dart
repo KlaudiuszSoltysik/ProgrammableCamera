@@ -1,3 +1,4 @@
+import 'package:camera/camera.dart';
 import "package:flutter/material.dart";
 import 'package:flutter/services.dart';
 import "package:wakelock_plus/wakelock_plus.dart";
@@ -12,6 +13,8 @@ class _CameraScreenState extends State<CameraScreen> {
     'com.example.mobile_application/native',
   );
   String? token;
+  CameraController? _cameraController;
+  bool _isStreaming = false;
 
   @override
   void didChangeDependencies() {
@@ -31,26 +34,69 @@ class _CameraScreenState extends State<CameraScreen> {
   void initState() {
     super.initState();
     WakelockPlus.enable();
-    _triggerNativeInit();
+    _triggerNativeStreaming();
+    _initCamera();
   }
 
   @override
   void dispose() {
     WakelockPlus.disable();
+    _cameraController?.dispose();
     super.dispose();
   }
 
-  Future<void> _triggerNativeInit() async {
-    try {
-      final String result = await platform.invokeMethod('initScreen');
-      print("Native response: $result");
-    } on PlatformException catch (e) {
-      print("Failed to call native method: '${e.message}'.");
+  Future<void> _triggerNativeStreaming() async {
+    _isStreaming = await platform.invokeMethod('initScreen');
+  }
+
+  Future<void> _initCamera() async {
+    final cameras = await availableCameras();
+    final rearCamera = cameras.firstWhere(
+      (camera) => camera.lensDirection == CameraLensDirection.back,
+    );
+
+    _cameraController = CameraController(
+      rearCamera,
+      ResolutionPreset.medium,
+      enableAudio: false,
+    );
+
+    await _cameraController!.initialize();
+    if (mounted) {
+      setState(() {});
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(body: Placeholder());
+    return Scaffold(
+      body:
+          _cameraController == null || !_cameraController!.value.isInitialized
+              ? Center(child: CircularProgressIndicator())
+              : Column(
+                children: [
+                  AspectRatio(
+                    aspectRatio: _cameraController!.value.aspectRatio,
+                    child: CameraPreview(_cameraController!),
+                  ),
+                  SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _isStreaming ? Colors.green : Colors.red,
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Text('streaming', style: TextStyle(fontSize: 16)),
+                    ],
+                  ),
+                ],
+              ),
+    );
   }
 }
