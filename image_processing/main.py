@@ -49,12 +49,10 @@ async def offer(request: Request):
 
     @pc.on("track")
     def on_track(track):
-        print(f"Track received: {track.kind}")
         if track.kind == "video":
             display = VideoDisplayTrack(track)
             pc.addTrack(display)
 
-    print(offer)
     try:
         await pc.setRemoteDescription(offer)
     except Exception as e:
@@ -66,5 +64,4 @@ async def offer(request: Request):
         "sdp": pc.localDescription.sdp,
         "type": pc.localDescription.type
     })
-
 
